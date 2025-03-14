@@ -41,6 +41,17 @@ def init_db():
     ''')
 
     cursor.execute('''
+    CREATE TABLE IF NOT EXISTS teacher_codes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    teacher_id INTEGER NOT NULL,
+    code TEXT NOT NULL UNIQUE,
+    used BOOLEAN DEFAULT FALSE,
+    subject TEXT NOT NULL,
+    FOREIGN KEY (teacher_id) REFERENCES teachers(id)
+);
+    ''')
+
+    cursor.execute('''
     CREATE TABLE IF NOT EXISTS cooteachers (
         id INTEGER PRIMARY KEY,
         username TEXT,
@@ -54,28 +65,45 @@ def init_db():
     ''')
 
     cursor.execute('''
-    CREATE TABLE IF NOT EXISTS requests (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        student_username TEXT NOT NULL,
-        subject TEXT NOT NULL,
-        description TEXT NOT NULL,
-        status TEXT DEFAULT 'open',
-        FOREIGN KEY (student_username) REFERENCES students(username)
-    );
-    ''')
-
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS responses (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        request_id INTEGER NOT NULL,
-        cooteacher_username TEXT NOT NULL,
-        FOREIGN KEY (request_id) REFERENCES requests(id),
-        FOREIGN KEY (cooteacher_username) REFERENCES cooteachers(username)
+    CREATE TABLE IF NOT EXISTS tickets (
+        id INTEGER PRIMARY KEY,
+        username TEXT,
+        subject TEXT,
+        status TEXT
     );
     ''')
 
     conn.commit()
     conn.close()
+
+
+def add_ticket(username, subject):
+    conn = get_db_connection()
+    conn.execute(
+        "INSERT INTO tickets (username, subject, status) VALUES (?, ?, ?)",
+        (username, subject, "waiting")
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_tickets():
+    conn = get_db_connection()
+    tickets = conn.execute(
+        "SELECT username FROM tickets"
+    ).fetchall()
+    ids = []
+    for x in tickets:
+        ids.append(int(x["username"]))
+    conn.close()
+    return ids
+
+
+def close_ticket(username):
+    conn = get_db_connection()
+    conn.execute("DELETE FROM tickets WHERE username=?", (str(username)))
+    conn.close()
+    return
 
 
 def add_student(username, first_name, second_name, phone_num, grade):
@@ -102,7 +130,37 @@ def add_teacher(username, first_name, last_name, phone_num, subject):
     conn = get_db_connection()
     conn.execute(
         "INSERT INTO teachers (username, first_name, last_name, phone_num, subject) VALUES (?, ?, ?, ?, ?)",
-        (username, first_name, last_name, phone_num, subject)
+        (username, first_name, last_name or '', phone_num, subject)
+    )
+    conn.commit()
+    conn.close()
+
+
+def add_teacher_code(teacher_id, code, subject):
+    conn = get_db_connection()
+    conn.execute(
+        "INSERT INTO teacher_codes (teacher_id, code, used, subject) VALUES (?, ?, ?, ?)",
+        (teacher_id, code.upper(), False, subject)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_code_info(code):
+    conn = get_db_connection()
+    code_info = conn.execute(
+        "SELECT * FROM teacher_codes WHERE code = ?",
+        (code,)
+    ).fetchone()
+    conn.close()
+    return code_info
+
+
+def mark_code_as_used(code):
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE teacher_codes SET used = ? WHERE code = ?",
+        (True, code)
     )
     conn.commit()
     conn.close()
@@ -135,6 +193,16 @@ def get_user_status(username):
     return None
 
 
+def get_teacher_code_info(code):
+    conn = get_db_connection()
+    code_info = conn.execute(
+        "SELECT * FROM teacher_codes WHERE code = ?",
+        (code.upper(),)
+    ).fetchone()
+    conn.close()
+    return code_info
+
+
 def user_exists(username):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -149,60 +217,22 @@ def user_exists(username):
     return result is not None
 
 
-def create_request(student_username, subject, description):
-    conn = get_db_connection()
-    conn.execute(
-        "INSERT INTO requests (student_username, subject, description) VALUES (?, ?, ?)",
-        (student_username, subject, description)
-    )
-    conn.commit()
-    conn.close()
+def delete_student(username):
+    with connect('project.db') as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM students WHERE username = ?", (username,))
+        conn.commit()
 
 
-def get_open_requests():
-    conn = get_db_connection()
-    requests = conn.execute(
-        "SELECT * FROM requests WHERE status = 'open'"
-    ).fetchall()
-    conn.close()
-    return requests
+def delete_cooteacher(username):
+    with connect('project.db') as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM cooteachers WHERE username = ?", (username,))
+        conn.commit()
 
 
-def create_response(request_id, cooteacher_username):
-    conn = get_db_connection()
-    conn.execute(
-        "INSERT INTO responses (request_id, cooteacher_username) VALUES (?, ?)",
-        (request_id, cooteacher_username)
-    )
-    conn.commit()
-    conn.close()
-
-
-def close_request(request_id):
-    conn = get_db_connection()
-    conn.execute(
-        "UPDATE requests SET status = 'closed' WHERE id = ?",
-        (request_id,)
-    )
-    conn.commit()
-    conn.close()
-
-
-def get_student_username_by_request_id(request_id):
-    conn = get_db_connection()
-    request = conn.execute(
-        "SELECT student_username FROM requests WHERE id = ?",
-        (request_id,)
-    ).fetchone()
-    conn.close()
-    return request['student_username'] if request else None
-
-
-def get_student_info(username):
-    conn = get_db_connection()
-    student_info = conn.execute(
-        "SELECT * FROM students WHERE username = ?",
-        (username,)
-    ).fetchone()
-    conn.close()
-    return student_info
+def delete_teacher(username):
+    with connect('project.db') as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM teachers WHERE username = ?", (username,))
+        conn.commit()

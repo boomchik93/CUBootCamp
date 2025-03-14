@@ -33,12 +33,6 @@ bot = Bot(
 dp = Dispatcher()
 
 
-class RegistrationStates(StatesGroup):
-    waiting_for_role = State()
-    waiting_for_grade = State()
-    waiting_for_subject = State()
-
-
 class TicketCreatingStates(StatesGroup):
     waiting_for_ticket_subject = State()
     done = State()
@@ -143,6 +137,7 @@ async def process_teacher_code(message: types.Message, state: FSMContext):
     await message.answer("✅ Регистрация завершена!")
     await show_cooteacher_menu(message)
     await state.clear()
+
 
 def generate_unique_code():
     characters = string.ascii_uppercase + string.digits
@@ -268,7 +263,6 @@ async def handle_change_role(message: types.Message, state: FSMContext):
 async def process_role(callback_query: types.CallbackQuery, state: FSMContext):
     role = callback_query.data
     await state.update_data(role=role)
-    data = await state.get_data()
 
     if role == 'role_student':
         await callback_query.message.answer("Введите ваш класс:")
@@ -339,37 +333,6 @@ async def process_subject(message: types.Message, state: FSMContext):
         await state.clear()
 
 
-async def show_student_menu(message: types.Message):
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Аккаунт")],
-            [KeyboardButton(text="Оставить запрос")]
-        ],
-        resize_keyboard=True
-    )
-    await message.answer("Меню ученика:", reply_markup=keyboard)
-
-
-async def show_cooteacher_menu(message: types.Message):
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Список активных запросов")]
-        ],
-        resize_keyboard=True
-    )
-    await message.answer("Меню помощника учителя:", reply_markup=keyboard)
-
-
-async def show_teacher_menu(message: types.Message):
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Создать уникальный код")]
-        ],
-        resize_keyboard=True
-    )
-    await message.answer("Меню учителя:", reply_markup=keyboard)
-
-
 @dp.message(lambda message: message.text == "Создать уникальный код")
 @dp.message(lambda message: message.text == "Создать уникальный код")
 async def handle_generate_code(message: types.Message):
@@ -387,6 +350,8 @@ async def handle_generate_code(message: types.Message):
         subject=teacher_info['data']['subject']
     )
     await message.answer(f"✅ Новый код для предмета {teacher_info['data']['subject']}:\n<code>{code}</code>")
+
+
 @dp.message(lambda message: message.text == "Оставить запрос")
 async def handle_ticket(message: types.Message, state: FSMContext):
     await state.set_state(TicketCreatingStates.waiting_for_ticket_subject)

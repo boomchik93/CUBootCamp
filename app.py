@@ -46,7 +46,27 @@ class RegistrationStates(StatesGroup):
     waiting_for_teacher_code = State()
 
 
-@dp.callback_query(RegistrationStates.waiting_for_role)
+@dp.message(Command("reregister"))
+async def command_reregister(message: types.Message, state: FSMContext):
+    await state.clear()
+
+    username = message.from_user.username or str(message.from_user.id)
+    user_info = db.get_user_status(username)
+
+    if user_info:
+        role = user_info['role']
+        if role == 'student':
+            db.delete_student(username)
+        elif role == 'cooteacher':
+            db.delete_cooteacher(username)
+        elif role == 'teacher':
+            db.delete_teacher(username)
+        await message.answer("♻️ Начинаем процесс перерегистрации...")
+        await send_welcome(message)
+    else:
+        await message.answer("‼️ Вы еще не зарегистрированы. Используйте /start.")
+
+
 @dp.callback_query(RegistrationStates.waiting_for_role)
 async def process_role(callback_query: types.CallbackQuery, state: FSMContext):
     role = callback_query.data
@@ -87,14 +107,13 @@ async def process_grade(message: types.Message, state: FSMContext):
             phone_num=data['phone_num'],
             grade=grade
         )
-        await message.answer("✅ Регистрация завершена!")
+        await message.answer("✅ Регистрация завершена!", reply_markup=types.ReplyKeyboardRemove())
         await show_student_menu(message)
         await state.clear()
     except ValueError:
         await message.answer("❌ Неверный формат класса. Введите число, например: 9")
 
 
-@dp.message(RegistrationStates.waiting_for_subject)
 @dp.callback_query(RegistrationStates.waiting_for_subject)
 async def process_subject(callback_query: types.CallbackQuery, state: FSMContext):
     subject_key = callback_query.data.replace('subject_', '')
@@ -119,19 +138,36 @@ async def process_subject(callback_query: types.CallbackQuery, state: FSMContext
         await state.clear()
 
     elif data['role'] == 'role_cooteacher':
-        await callback_query.message.answer("🔢 Введите код учителя:")
+        cancel_keyboard = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="❌ Отмена")]],
+            resize_keyboard=True,
+            one_time_keyboard=True
+        )
+        await callback_query.message.answer("🔢 Введите код учителя:", reply_markup=cancel_keyboard)
         await state.set_state(RegistrationStates.waiting_for_teacher_code)
+
+
+@dp.callback_query(RegistrationStates.waiting_for_teacher_code)
+async def cancel_teacher_code(callback_query: types.CallbackQuery, state: FSMContext):
+    if callback_query.data == "cancel_code":
+        await state.clear()
+        await callback_query.message.answer("🚫 Ввод кодового шифра отменен.")
 
 
 @dp.message(RegistrationStates.waiting_for_teacher_code)
 async def process_teacher_code(message: types.Message, state: FSMContext):
+    if message.text.strip() == "❌ Отмена":
+        await message.answer("❌ Регистрация отменена.", reply_markup=types.ReplyKeyboardRemove())
+        await state.clear()
+        await ask_for_role(message, state)
+        return
+
     code = message.text.strip().upper()
     code_info = db.get_teacher_code_info(code)
     data = await state.get_data()
 
     if not code_info:
         return await message.answer("❌ Неверный код")
-
     if code_info['used']:
         return await message.answer("⚠️ Код уже использован")
     if code_info['subject'] != data.get('subject'):
@@ -147,7 +183,8 @@ async def process_teacher_code(message: types.Message, state: FSMContext):
             int(data['grade']),
             data['subject']
         )
-        await message.answer(f"✅ Регистрация успешна!\nСсылка для чата экспертов: {ADMIN_CHAT_LINK}")
+        await message.answer(f"✅ Регистрация успешна!\nСсылка для чата экспертов: {ADMIN_CHAT_LINK}",
+                             reply_markup=types.ReplyKeyboardRemove())
         await show_cooteacher_menu(message)
     except Exception as e:
         await message.answer("❌ Ошибка регистрации")
@@ -170,25 +207,11 @@ async def send_welcome(message: types.Message):
         resize_keyboard=True,
         one_time_keyboard=True
     )
-    await message.answer("👮 Привет! Для начала работы поделись своим контактом.", reply_markup=keyboard)
+    await message.answer("👋 Привет! Для начала работы поделись своим контактом.", reply_markup=keyboard)
 
 
-@dp.message(lambda message: message.contact is not None)
 @dp.message(lambda message: message.contact is not None)
 async def handle_contact(message: types.Message, state: FSMContext):
-    async def show_profile_by_role(message: types.Message, user_info: dict):
-        role = user_info['role']
-        data = user_info['data']
-
-        if role == 'student':
-            await show_student_profile(message, data)
-        elif role == 'cooteacher':
-            await show_cooteacher_profile(message, data)
-        elif role == 'teacher':
-            await show_teacher_profile(message, data)
-        else:
-            await message.answer("❌ Неизвестный тип пользователя")
-
     contact = message.contact
     user_data = {
         'username': message.from_user.username or str(message.contact.user_id),
@@ -206,11 +229,25 @@ async def handle_contact(message: types.Message, state: FSMContext):
         await ask_for_role(message, state)
 
 
+async def show_profile_by_role(message: types.Message, user_info: dict):
+    role = user_info['role']
+    data = user_info['data']
+
+    if role == 'student':
+        await show_student_profile(message, data)
+    elif role == 'cooteacher':
+        await show_cooteacher_profile(message, data)
+    elif role == 'teacher':
+        await show_teacher_profile(message, data)
+    else:
+        await message.answer("❌ Неизвестный тип пользователя")
+
+
 async def ask_for_role(message: types.Message, state: FSMContext):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🧑‍🎓 Я ученик", callback_data="role_student")],
-        [InlineKeyboardButton(text="🧑‍🔬 Я помощник учителя", callback_data="role_cooteacher")],
-        [InlineKeyboardButton(text="🧑‍🏫 Я учитель", callback_data="role_teacher")]
+        [InlineKeyboardButton(text="🧑🎓 Я ученик", callback_data="role_student")],
+        [InlineKeyboardButton(text="🧑🔬 Я помощник учителя", callback_data="role_cooteacher")],
+        [InlineKeyboardButton(text="🧑🏫 Я учитель", callback_data="role_teacher")]
     ])
     await message.answer("🦺 Выберите вашу роль:", reply_markup=keyboard)
     await state.set_state(RegistrationStates.waiting_for_role)
@@ -229,8 +266,8 @@ async def command_reregister(message: types.Message, state: FSMContext):
             db.delete_cooteacher(username)
         elif role == 'teacher':
             db.delete_teacher(username)
-        await message.answer("Начинаем процесс перерегистрации...")
-        await ask_for_role(message, state)
+        await message.answer("♻️ Начинаем процесс перерегистрации...")
+        await send_welcome(message)
     else:
         await message.answer("‼️ Вы еще не зарегистрированы. Используйте /start.")
 
@@ -238,8 +275,7 @@ async def command_reregister(message: types.Message, state: FSMContext):
 async def show_student_menu(message: types.Message):
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="👨‍🦰 Аккаунт")],
-            [KeyboardButton(text="✍️ Оставить запрос")]
+            [KeyboardButton(text="👨🦰 Аккаунт"), KeyboardButton(text="✍️ Оставить запрос")]
         ],
         resize_keyboard=True
     )
@@ -249,131 +285,83 @@ async def show_student_menu(message: types.Message):
 async def show_cooteacher_menu(message: types.Message):
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📋 Список активных запросов")]
+            [KeyboardButton(text="📋 Список активных запросов"), KeyboardButton(text="👨🦰 Аккаунт")]
         ],
         resize_keyboard=True
     )
-    await message.answer("🧑‍🏫 Меню помощника учителя:", reply_markup=keyboard)
+    await message.answer("🧑🔬 Меню помощника учителя:", reply_markup=keyboard)
 
 
 async def show_teacher_menu(message: types.Message):
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Создать уникальный код")]
+            [KeyboardButton(text="🔢 Создать уникальный код"), KeyboardButton(text="👨🦰 Аккаунт")]
         ],
         resize_keyboard=True
     )
-    await message.answer("🧑‍🏫 Меню учителя:", reply_markup=keyboard)
+    await message.answer("🧑🏫 Меню учителя:", reply_markup=keyboard)
 
 
-@dp.message(lambda message: message.text == "🔔 Сменить роль")
-async def handle_change_role(message: types.Message, state: FSMContext):
-    await command_reregister(message, state)
+@dp.message(lambda message: message.text == "👨🦰 Аккаунт")
+async def handle_account(message: types.Message):
+    username = message.from_user.username or str(message.from_user.id)
+    user_info = db.get_user_status(username)
 
+    if not user_info:
+        return await message.answer("❌ Пользователь не найден!")
 
-@dp.callback_query(RegistrationStates.waiting_for_role)
-async def process_role(callback_query: types.CallbackQuery, state: FSMContext):
-    role = callback_query.data
-    await state.update_data(role=role)
+    role_translation = {
+        'student': 'Ученик',
+        'teacher': 'Учитель',
+        'cooteacher': 'Помощник учителя'
+    }
 
-    if role == 'role_student':
-        await callback_query.message.answer("Введите ваш класс:")
-        await state.set_state(RegistrationStates.waiting_for_grade)
-    elif role == 'role_cooteacher':
-        await callback_query.message.answer("Введите ваш класс:")
-        await state.set_state(RegistrationStates.waiting_for_grade)
-    elif role == 'role_teacher':
-        await callback_query.message.answer("Введите ваш предмет:")
-        await state.set_state(RegistrationStates.waiting_for_subject)
+    data = user_info['data']
+    role = role_translation.get(user_info['role'], 'Неизвестная роль')
 
+    response = "👤 <b>Ваш профиль:</b>\n"
+    response += f"▫️ <b>Роль:</b> {role}\n"
+    response += f"▫️ <b>Имя:</b> {data.get('first_name', 'не указано')}\n"
+    response += f"▫️ <b>Фамилия:</b> {data.get('second_name', data.get('last_name', 'не указана'))}\n"
+    response += f"▫️ <b>Телефон:</b> {data.get('phone_num', 'не указан')}\n"
 
-@dp.message(RegistrationStates.waiting_for_teacher_code)
-async def process_teacher_code(message: types.Message, state: FSMContext):
-    code = message.text.strip().upper()
-    code_info = db.get_teacher_code_info(code)
-    data = await state.get_data()
+    if user_info['role'] in ['student', 'cooteacher']:
+        response += f"▫️ <b>Класс:</b> {data.get('grade', 'не указан')}\n"
 
-    if not code_info:
-        await message.answer("Неверный код. Попробуйте снова.")
-        return
+    if user_info['role'] in ['teacher', 'cooteacher']:
+        response += f"▫️ <b>Предмет:</b> {data.get('subject', 'не указан')}"
 
-    if code_info['used']:
-        await message.answer("Этот код уже использован. Попробуйте снова.")
-        return
-
-    if code_info['subject'] != data['subject']:
-        await message.answer("Код не соответствует выбранному предмету. Попробуйте снова.")
-        return
-
-    db.add_cooteacher(
-        data['username'], data['first_name'], data['second_name'], data['phone_num'], data['grade'], data['subject']
-    )
-    db.mark_code_as_used(code)
-    await message.answer("✅ Регистрация завершена!")
-    await show_cooteacher_menu(message)
-    await state.clear()
-
-
-@dp.message(RegistrationStates.waiting_for_grade)
-async def process_grade(message: types.Message, state: FSMContext):
-    await state.update_data(grade=int(message.text))
-    data = await state.get_data()
-    if data['role'] == 'role_student':
-        db.add_student(data['username'], data['first_name'], data['second_name'], data['phone_num'], data['grade'])
-        await message.answer("✅ Регистрация завершена!")
-        await show_student_menu(message)
-        await state.clear()
-    elif data['role'] == 'role_cooteacher':
-        await message.answer("Введите ваш предмет:")
-        await state.set_state(RegistrationStates.waiting_for_subject)
-
-
-@dp.message(RegistrationStates.waiting_for_subject)
-async def process_subject(message: types.Message, state: FSMContext):
-    await state.update_data(subject=message.text)
-    data = await state.get_data()
-    if data['role'] == 'role_cooteacher':
-        db.add_cooteacher(data['username'], data['first_name'], data['second_name'], data['phone_num'], data['grade'],
-                          data['subject'])
-        await message.answer("✅ Регистрация завершена!")
-        await show_cooteacher_menu(message)
-        await state.clear()
-    elif data['role'] == 'role_teacher':
-        db.add_teacher(data['username'], data['first_name'], data['second_name'], data['phone_num'], data['subject'])
-        await message.answer("✅ Регистрация завершена!")
-        await show_teacher_menu(message)
-        await state.clear()
+    await message.answer(response, parse_mode=ParseMode.HTML)
 
 
 async def show_student_menu(message: types.Message):
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="👨‍🦰 Аккаунт")],
-            [KeyboardButton(text="✍️ Оставить запрос")]
+            [KeyboardButton(text="👨🦰 Аккаунт"), KeyboardButton(text="✍️ Оставить запрос")],
         ],
         resize_keyboard=True
     )
-    await message.answer("🧑‍🏫 Меню ученика:", reply_markup=keyboard)
+    await message.answer("📋 Меню ученика:", reply_markup=keyboard)
 
 
 async def show_cooteacher_menu(message: types.Message):
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📋 Список активных запросов")]
+            [KeyboardButton(text="📋 Список активных запросов"), KeyboardButton(text="👨🦰 Аккаунт")],
         ],
         resize_keyboard=True
     )
-    await message.answer("🧑‍🏫 Меню помощника учителя:", reply_markup=keyboard)
+    await message.answer("🧑🔬 Меню помощника учителя:", reply_markup=keyboard)
 
 
 async def show_teacher_menu(message: types.Message):
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🔢 Создать уникальный код")]
+            [KeyboardButton(text="🔢 Создать уникальный код"), KeyboardButton(text="👨🦰 Аккаунт")],
         ],
         resize_keyboard=True
     )
-    await message.answer("🧑‍🏫 Меню учителя:", reply_markup=keyboard)
+    await message.answer("🧑🏫 Меню учителя:", reply_markup=keyboard)
 
 
 @dp.message(lambda message: message.text == "🔢 Создать уникальный код")
@@ -382,7 +370,7 @@ async def handle_generate_code(message: types.Message):
     teacher_info = db.get_user_status(username)
 
     if not teacher_info or teacher_info['role'] != 'teacher':
-        await message.answer("‼️Только учителя могут создавать коды!")
+        await message.answer("‼️ Только учителя могут создавать коды!")
         return
 
     code = generate_unique_code()
@@ -394,64 +382,10 @@ async def handle_generate_code(message: types.Message):
     await message.answer(f"✅ Новый код для предмета {teacher_info['data']['subject']}:\n<code>{code}</code>")
 
 
-@dp.message(lambda message: message.text == "🧑‍🏫Главное меню")
-async def handle_main_menu(message: types.Message, state: FSMContext):
-    await state.clear()
-
-    username = message.from_user.username or str(message.from_user.id)
-    user_info = db.get_user_status(username)
-
-    if not user_info:
-        await message.answer("Пожалуйста, пройдите регистрацию через /start")
-        return
-
-    role = user_info['role']
-    if role == 'student':
-        await show_student_menu(message)
-    elif role == 'teacher':
-        await show_teacher_menu(message)
-    elif role == 'cooteacher':
-        await show_cooteacher_menu(message)
-
-
-async def show_student_menu(message: types.Message):
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="👨‍🦰 Аккаунт")],
-            [KeyboardButton(text="✍️ Оставить запрос")],
-            [KeyboardButton(text="🧑‍🏫 Главное меню")]
-        ],
-        resize_keyboard=True
-    )
-    await message.answer("🧑‍🏫 Меню ученика:", reply_markup=keyboard)
-
-
-async def show_cooteacher_menu(message: types.Message):
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📋 Список активных запросов")],
-            [KeyboardButton(text="🧑‍🏫 Главное меню")]
-        ],
-        resize_keyboard=True
-    )
-    await message.answer("🧑‍🏫 Меню помощника учителя:", reply_markup=keyboard)
-
-
-async def show_teacher_menu(message: types.Message):
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🔢 Создать уникальный код")],
-            [KeyboardButton(text="🧑‍🏫 Главное меню")]
-        ],
-        resize_keyboard=True
-    )
-    await message.answer("🧑‍🏫 Меню учителя:", reply_markup=keyboard)
-
-
 @dp.message(lambda message: message.text == "✍️ Оставить запрос")
 async def handle_ticket(message: types.Message, state: FSMContext):
     await state.set_state(TicketCreatingStates.waiting_for_ticket_subject)
-    await message.answer(f"✍️ Напишите свой вопрос:")
+    await message.answer("✍️ Напишите свой вопрос:")
 
 
 @dp.message(TicketCreatingStates.waiting_for_ticket_subject)
@@ -459,11 +393,12 @@ async def process_ticket_subject(message: types.Message, state: FSMContext):
     await state.update_data(subject=message.text)
     data = await state.get_data()
     ticket = f"""
-            ❓ Вопрос: {message.from_user.id}
-            Сообщение: {data["subject"]}
-                """
-    await state.set_state(TicketCreatingStates.done)
+    ❓ Вопрос от пользователя: {message.from_user.id}
+    Сообщение: {data["subject"]}
+    """
     await bot.send_message(ADMIN_CHAT_ID, ticket)
+    await state.clear()
+    await message.answer("✅ Ваш запрос отправлен экспертам!")
 
 
 @dp.message(lambda message: message.chat.id == ADMIN_CHAT_ID)
@@ -471,56 +406,26 @@ async def handle_admin_group(message: types.Message):
     if message.reply_to_message:
         try:
             original_message = message.reply_to_message.text
-            ticket_id = int(original_message.split("\n")[0].split(": ")[1].strip())
+            ticket_id = int(original_message.split("пользователя: ")[1].split("\n")[0].strip())
 
             await bot.send_message(
                 chat_id=ticket_id,
                 text=f"📨 Ответ от эксперта:\n{message.text}"
             )
-
+            await message.answer("✅ Ответ успешно отправлен!")
         except Exception as e:
             print(f"Error processing admin reply: {e}")
 
 
-@dp.message(lambda message: message.text.isupper() and len(message.text) == 5)
-async def handle_code_usage(message: types.Message):
-    try:
-        code = message.text.strip().upper()
-        code_info = db.get_teacher_code_info(code)
-
-        if not code_info:
-            return await message.answer("❌ Неверный код")
-
-        if code_info['used']:
-            return await message.answer("⚠️ Этот код уже использован")
-
-        user_info = db.get_user_status(message.from_user.username)
-        if code_info['subject'] != user_info['data']['subject']:
-            return await message.answer(f"🚫 Код предназначен для другого предмета")
-
-        db.mark_code_as_used(code)
-        await message.answer("✅ Код успешно активирован!")
-
-    except Exception as e:
-        print(f"Ошибка при активации кода: {e}")
-        await message.answer("🚫 Произошла ошибка при обработке кода")
-
-
 async def show_student_profile(message: types.Message, data):
-    response = f"👀 Имя: {data['first_name']} {data['second_name']}\n📱 Телефон: {data['phone_num']}\n🏫 Класс: {data['grade']}"
-    await message.answer(response)
     await show_student_menu(message)
 
 
 async def show_cooteacher_profile(message: types.Message, data):
-    response = f"👀 Имя: {data['first_name']} {data['second_name']}\n📱 Телефон: {data['phone_num']}\n🏫 Класс: {data['grade']}\n📙 Предмет: {data['subject']}"
-    await message.answer(response)
     await show_cooteacher_menu(message)
 
 
 async def show_teacher_profile(message: types.Message, data):
-    response = f"👀 Имя: {data['first_name']} {data['last_name']}\n📱 Телефон: {data['phone_num']}\n📙 Предмет: {data['subject']}"
-    await message.answer(response)
     await show_teacher_menu(message)
 
 

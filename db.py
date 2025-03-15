@@ -8,10 +8,7 @@ def get_db_connection():
 
 
 def dict_factory(cursor, row):
-    d = {}
-    for idx, col in enumerate(cursor.description):
-        d[col[0]] = row[idx]
-    return d
+    return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
 
 
 def init_db():
@@ -119,7 +116,9 @@ def add_student(username, first_name, second_name, phone_num, grade):
 def add_cooteacher(username, first_name, second_name, phone_num, grade, subject):
     conn = get_db_connection()
     conn.execute(
-        "INSERT INTO cooteachers (username, first_name, second_name, phone_num, grade, subject) VALUES (?, ?, ?, ?, ?, ?)",
+        """INSERT INTO cooteachers 
+        (username, first_name, second_name, phone_num, grade, subject) 
+        VALUES (?, ?, ?, ?, ?, ?)""",
         (username, first_name, second_name, phone_num, grade, subject)
     )
     conn.commit()
@@ -139,31 +138,50 @@ def add_teacher(username, first_name, last_name, phone_num, subject):
 def add_teacher_code(teacher_id, code, subject):
     conn = get_db_connection()
     conn.execute(
-        "INSERT INTO teacher_codes (teacher_id, code, used, subject) VALUES (?, ?, ?, ?)",
-        (teacher_id, code.upper(), False, subject)
+        """INSERT INTO teacher_codes 
+        (teacher_id, code, used, subject) 
+        VALUES (?, ?, ?, ?)""",
+        (teacher_id, code.upper(), 0, subject)
     )
     conn.commit()
     conn.close()
-
-
-def get_code_info(code):
-    conn = get_db_connection()
-    code_info = conn.execute(
-        "SELECT * FROM teacher_codes WHERE code = ?",
-        (code,)
-    ).fetchone()
-    conn.close()
-    return code_info
 
 
 def mark_code_as_used(code):
     conn = get_db_connection()
-    conn.execute(
-        "UPDATE teacher_codes SET used = ? WHERE code = ?",
-        (True, code)
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            "UPDATE teacher_codes SET used = 1 WHERE code = ?",
+            (code.upper(),)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_teacher_code_info(code):
+    conn = get_db_connection()
+    try:
+        code_info = conn.execute(
+            """SELECT tc.*, t.subject as teacher_subject 
+               FROM teacher_codes tc
+               JOIN teachers t ON tc.teacher_id = t.id
+               WHERE code = ?""",
+            (code.upper(),)
+        ).fetchone()
+
+        if code_info:
+            return {
+                'id': code_info['id'],
+                'code': code_info['code'],
+                'used': bool(code_info['used']),
+                'subject': code_info['subject'],
+                'teacher_id': code_info['teacher_id'],
+                'teacher_subject': code_info['teacher_subject']
+            }
+        return None
+    finally:
+        conn.close()
 
 
 def get_user_status(username):
@@ -191,16 +209,6 @@ def get_user_status(username):
 
     conn.close()
     return None
-
-
-def get_teacher_code_info(code):
-    conn = get_db_connection()
-    code_info = conn.execute(
-        "SELECT * FROM teacher_codes WHERE code = ?",
-        (code.upper(),)
-    ).fetchone()
-    conn.close()
-    return code_info
 
 
 def user_exists(username):

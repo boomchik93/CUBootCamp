@@ -22,7 +22,8 @@ SUBJECTS = {
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-admin_chat_id = -4624308253
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT")
+ADMIN_CHAT_LINK = os.getenv("ADMIN_LIMK")
 if not BOT_TOKEN:
     raise ValueError("Токен не найден! Проверьте .env файл.")
 
@@ -31,6 +32,12 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 dp = Dispatcher()
+
+
+class RegistrationStates(StatesGroup):
+    waiting_for_role = State()
+    waiting_for_grade = State()
+    waiting_for_subject = State()
 
 
 class TicketCreatingStates(StatesGroup):
@@ -114,29 +121,28 @@ async def process_teacher_code(message: types.Message, state: FSMContext):
     data = await state.get_data()
 
     if not code_info:
-        await message.answer("❌ Код не найден. Проверьте правильность ввода.")
-        return
-
+        return await message.answer("❌ Неверный код")
     if code_info['used']:
-        await message.answer("⚠️ Этот код уже был использован.")
-        return
-
+        return await message.answer("⚠️ Код уже использован")
     if code_info['subject'] != data.get('subject'):
-        await message.answer(f"🚫 Код предназначен для предмета: {code_info['subject']}")
-        return
+        return await message.answer(f"🚫 Код предназначен для предмета: {code_info['subject']}")
 
-    db.mark_code_as_used(code)
-    db.add_cooteacher(
-        username=data['username'],
-        first_name=data['first_name'],
-        second_name=data.get('second_name', ''),
-        phone_num=data['phone_num'],
-        grade=data['grade'],
-        subject=data['subject']
-    )
-    await message.answer("✅ Регистрация завершена!")
-    await show_cooteacher_menu(message)
-    await state.clear()
+    try:
+        db.mark_code_as_used(code)
+        db.add_cooteacher(
+            data['username'],
+            data['first_name'],
+            data['second_name'],
+            data['phone_num'],
+            int(data['grade']),
+            data['subject']
+        )
+        await message.answer(f"✅ Регистрация успешна!\nСсылка для чата экспертов: {ADMIN_CHAT_LINK}")
+        await show_cooteacher_menu(message)
+    except Exception as e:
+        await message.answer("❌ Ошибка регистрации")
+    finally:
+        await state.clear()
 
 
 def generate_unique_code():
@@ -263,6 +269,7 @@ async def handle_change_role(message: types.Message, state: FSMContext):
 async def process_role(callback_query: types.CallbackQuery, state: FSMContext):
     role = callback_query.data
     await state.update_data(role=role)
+    data = await state.get_data()
 
     if role == 'role_student':
         await callback_query.message.answer("Введите ваш класс:")
@@ -333,6 +340,37 @@ async def process_subject(message: types.Message, state: FSMContext):
         await state.clear()
 
 
+async def show_student_menu(message: types.Message):
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Аккаунт")],
+            [KeyboardButton(text="Оставить запрос")]
+        ],
+        resize_keyboard=True
+    )
+    await message.answer("Меню ученика:", reply_markup=keyboard)
+
+
+async def show_cooteacher_menu(message: types.Message):
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Список активных запросов")]
+        ],
+        resize_keyboard=True
+    )
+    await message.answer("Меню помощника учителя:", reply_markup=keyboard)
+
+
+async def show_teacher_menu(message: types.Message):
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Создать уникальный код")]
+        ],
+        resize_keyboard=True
+    )
+    await message.answer("Меню учителя:", reply_markup=keyboard)
+
+
 @dp.message(lambda message: message.text == "Создать уникальный код")
 @dp.message(lambda message: message.text == "Создать уникальный код")
 async def handle_generate_code(message: types.Message):
@@ -367,10 +405,10 @@ async def process_ticket_subject(message: types.Message, state: FSMContext):
 Сообщение: {data["subject"]}
     """
     await state.set_state(TicketCreatingStates.done)
-    await bot.send_message(admin_chat_id, ticket)
+    await bot.send_message(ADMIN_CHAT_ID, ticket)
 
 
-@dp.message(lambda message: message.chat.id == admin_chat_id)
+@dp.message(lambda message: message.chat.id == ADMIN_CHAT_ID)
 async def handle_admin_group(message: types.Message):
     m = message.reply_to_message.text
     try:
@@ -382,16 +420,26 @@ async def handle_admin_group(message: types.Message):
 
 @dp.message(lambda message: message.text.isupper() and len(message.text) == 5)
 async def handle_code_usage(message: types.Message):
-    code = message.text
-    code_info = db.get_code_info(code)
-    if code_info:
+    try:
+        code = message.text.strip().upper()
+        code_info = db.get_teacher_code_info(code)
+
+        if not code_info:
+            return await message.answer("❌ Неверный код")
+
         if code_info['used']:
-            await message.answer("Этот код уже использован.")
-        else:
-            db.mark_code_as_used(code)
-            await message.answer("Код успешно активирован!")
-    else:
-        await message.answer("Неверный код.")
+            return await message.answer("⚠️ Этот код уже использован")
+
+        user_info = db.get_user_status(message.from_user.username)
+        if code_info['subject'] != user_info['data']['subject']:
+            return await message.answer(f"🚫 Код предназначен для другого предмета")
+
+        db.mark_code_as_used(code)
+        await message.answer("✅ Код успешно активирован!")
+
+    except Exception as e:
+        print(f"Ошибка при активации кода: {e}")
+        await message.answer("🚫 Произошла ошибка при обработке кода")
 
 
 async def show_student_profile(message: types.Message, data):

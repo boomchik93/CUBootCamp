@@ -309,7 +309,7 @@ async def process_teacher_code(message: types.Message, state: FSMContext):
         data['username'], data['first_name'], data['second_name'], data['phone_num'], data['grade'], data['subject']
     )
     db.mark_code_as_used(code)
-    await message.answer("Регистрация завершена!")
+    await message.answer("✅ Регистрация завершена!")
     await show_cooteacher_menu(message)
     await state.clear()
 
@@ -320,7 +320,7 @@ async def process_grade(message: types.Message, state: FSMContext):
     data = await state.get_data()
     if data['role'] == 'role_student':
         db.add_student(data['username'], data['first_name'], data['second_name'], data['phone_num'], data['grade'])
-        await message.answer("Регистрация завершена!")
+        await message.answer("✅ Регистрация завершена!")
         await show_student_menu(message)
         await state.clear()
     elif data['role'] == 'role_cooteacher':
@@ -335,12 +335,12 @@ async def process_subject(message: types.Message, state: FSMContext):
     if data['role'] == 'role_cooteacher':
         db.add_cooteacher(data['username'], data['first_name'], data['second_name'], data['phone_num'], data['grade'],
                           data['subject'])
-        await message.answer("Регистрация завершена!")
+        await message.answer("✅ Регистрация завершена!")
         await show_cooteacher_menu(message)
         await state.clear()
     elif data['role'] == 'role_teacher':
         db.add_teacher(data['username'], data['first_name'], data['second_name'], data['phone_num'], data['subject'])
-        await message.answer("Регистрация завершена!")
+        await message.answer("✅ Регистрация завершена!")
         await show_teacher_menu(message)
         await state.clear()
 
@@ -376,7 +376,6 @@ async def show_teacher_menu(message: types.Message):
     await message.answer("🧑‍🏫 Меню учителя:", reply_markup=keyboard)
 
 
-# @dp.message(lambda message: message.text == "🔢 Создать уникальный код")
 @dp.message(lambda message: message.text == "🔢 Создать уникальный код")
 async def handle_generate_code(message: types.Message):
     username = message.from_user.username or str(message.from_user.id)
